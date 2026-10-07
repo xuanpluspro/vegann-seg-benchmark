@@ -2,3 +2,4 @@ segmentation-models-pytorch==0.5.0
 numpy>=1.24,<3
 Pillow>=10
 scipy>=1.10,<2
+fvcore==0.1.5.post20221221
