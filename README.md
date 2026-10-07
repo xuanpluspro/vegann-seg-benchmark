@@ -69,7 +69,7 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 
 每组保存 `config.json`、`history.csv`、`last.pth`、`best.pth`、`metrics.json`。最佳权重仅按验证集两类 mIoU 选择，最后评估独立测试集。预测阈值固定 0.5，不使用测试集调阈值。
 
-评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出仍是植物概率，评估时统一转换为 0 植物、1 背景、255 忽略。参数量包含完整模型，暂未包含 FLOPs 和推理延迟。边界距离计算会增加验证耗时。
+评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出仍是植物概率，评估时统一转换为 0 植物、1 背景、255 忽略。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
 
 ```bash
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --output outputs/unet_resnet34_seed42 --eval-only
@@ -80,3 +80,22 @@ python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --
 ## 实验建议
 
 所有模型使用相同数据划分、尺寸、指标及预算；先单种子筛选，再多种子报告均值和标准差。使用已有 VOC 划分，不自动随机重分数据。若对照 VegAnn 官方五套划分，分别生成对应清单并分开保存输出。实验日志和数据不提交 Git。
+
+## 自动复杂度和速度测试
+
+每组加载最佳权重，完成精度评估后，自动保存 benchmark.json，并把 params_m、gflops、counted_gflops、flops_complete、latency_ms、fps 写入 results.csv。
+
+- 输入为 batch=1、RGB、--size × --size（默认 512×512），与训练 batch size 无关。
+- 参数量 params_m 单位百万，统计完整网络。
+- GFLOPs 使用 fvcore 原生口径：一次乘加计 1 次运算。不要与乘加计 2 次的表格直接比较。
+- fvcore 未统计的算子会记录在 unsupported_ops；存在未支持算子时 gflops 留空，counted_gflops 仅为已统计部分，不能当作完整计算量。即使 flops_complete 为 true，也遵循 fvcore 默认忽略某些操作的估计口径。
+- FPS/延迟使用 eager PyTorch FP32，关闭 autocast 和 TF32，无 TensorRT、无 torch.compile。默认预热 50 次，测量 200 次，CUDA Event 计时并同步。
+- latency_ms 是单图 GPU 前向平均耗时；fps=1000/latency_ms，为纯模型前向的等效 FPS。不包含读图、预处理、CPU/GPU 传输、sigmoid/阈值和指标计算，不代表应用端到端吞吐。
+- 没有 CUDA 时不生成 GPU FPS；避免与 CPU 结果混用。元数据记录 GPU、PyTorch/CUDA/cuDNN 版本、输入形状、精度和计时范围。测速期间避免同卡同时训练其他任务。
+- --benchmark-warmup 和 --benchmark-iterations 可修改次数；所有模型必须一致。
+
+GPU 完整训练及测速需在 AutoDL 环境验证。本仓库构建环境仅完成静态和局部逻辑检查，没有实测性能数字。
+
+## 修改记录
+
+所有仓库改动都通过 GitHub commit 保存，可在仓库 Commits 查看逐次修改及文件 diff。此次加入 benchmark.py，并更新训练、批量汇总和依赖。每个实验的 config.json、history.csv、metrics.json、benchmark.json 是实验记录，与 Git 修改记录分别保存。
