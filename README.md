@@ -12,7 +12,7 @@ cd vegann-seg-benchmark
 pip install -r requirements.txt
 ```
 
-首次使用预训练权重需要服务器能访问下载源；下载失败应检查网络或上传本地权重，不能把失败当作从零训练成功。SMP 固定为 0.5.0。
+默认 `--weights none`，所有模型随机初始化，从零训练，不下载预训练权重。仅显式传入 `--weights imagenet` 才启用骨干预训练。SMP 固定为 0.5.0。
 
 ## 2. 数据格式
 
@@ -33,7 +33,7 @@ VOC2012/
 
 必须明确选择掩膜模式，避免静默误读：
 
-- `--mask-encoding voc`：0 背景、1 植物、255 忽略。支持 VOC 调色板 PNG，直接读索引值。
+- `--mask-encoding voc`：默认 0 植物、1 背景、255 忽略，与上传的 metrics.py 一致；若实际掩膜是 1 植物、0 背景，必须加 `--foreground-class 1`。支持 VOC 调色板 PNG，直接读索引值。
 - `--mask-encoding binary255`：0 背景、255 植物，没有忽略标签。
 
 RGB 彩色掩膜会报错，需要先转换为单通道类别标签。数据检查拒绝缺图、异常标签、重复 ID、训练/验证/测试重叠。图像缩放使用双线性，掩膜使用最近邻；训练只做同步水平/垂直翻转。
@@ -54,7 +54,7 @@ python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --
 python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --epochs 100 --batch-size 8
 ```
 
-默认顺序跑 `experiments.json` 的 10 组：Unet、UnetPlusPlus、MAnet、FPN、PSPNet、DeepLabV3Plus（ResNet34）；Unet、DeepLabV3Plus（MobileNetV2）；Segformer（MiT-B0、MiT-B2）。Segformer 的 MiT 编码器使用自己的预训练权重，预训练条件应在论文中说明。SMP 的 Unet 是使用所选骨干的变体，并非原始从零训练 U-Net。
+默认顺序跑 `experiments.json` 的 10 组：Unet、UnetPlusPlus、MAnet、FPN、PSPNet、DeepLabV3Plus（ResNet34）；Unet、DeepLabV3Plus（MobileNetV2）；Segformer（MiT-B0、MiT-B2）。所有骨干（包括 Segformer 的 MiT）默认随机初始化，无预训练下载。SMP 的 Unet 是使用所选骨干的变体，并非原始从零训练 U-Net。
 
 ```bash
 # 三次随机种子重复实验
@@ -69,13 +69,13 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 
 每组保存 `config.json`、`history.csv`、`last.pth`、`best.pth`、`metrics.json`。最佳权重仅按验证集两类 mIoU 选择，最后评估独立测试集。预测阈值固定 0.5，不使用测试集调阈值。
 
-指标从整个数据集累计混淆矩阵计算：前景 IoU、背景 IoU、两类 mIoU、前景 Dice、Precision、Recall、Pixel Accuracy。分母为零的指标为 null；mIoU 对有定义类别平均。参数量包含编码器、解码器和输出层。框架暂未包含 FLOPs、推理延迟或边界指标，请勿将其与已测指标混淆。
+评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出仍是植物概率，评估时统一转换为 0 植物、1 背景、255 忽略。参数量包含完整模型，暂未包含 FLOPs 和推理延迟。边界距离计算会增加验证耗时。
 
 ```bash
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --output outputs/unet_resnet34_seed42 --eval-only
 ```
 
-恢复和独立评估需匹配原始配置（包括 epochs、batch size、seed）；训练权重是自己生成的可信文件才可载入。`--weights none` 从零训练；默认 ImageNet 骨干预训练，编码器全量参与训练。
+恢复和独立评估需匹配原始配置（包括 epochs、batch size、seed）；训练权重是自己生成的可信文件才可载入。`--weights none` 从零训练；默认从零训练，全部参数参与训练。更改指标版本、前景标签或预训练模式后应使用新输出目录，避免与旧实验混用。
 
 ## 实验建议
 
