@@ -43,7 +43,7 @@ RGB 彩色掩膜会报错，需要先转换为单通道类别标签。数据检�
 以下服务器路径是假设上传位置，请按实际路径调整：
 
 ```bash
-python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --epochs 100 --batch-size 8 --output outputs/unet_resnet34_seed42
+python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --epochs 30 --batch-size 32 --output outputs/unet_resnet34_seed42
 ```
 
 先用 `--epochs 2 --workers 0` 在单独输出目录验证流程，再开始正式训练。显存不足时降低 batch size。没有独立测试集时显式加 `--test-split none`，输出只包含验证指标，不能称为测试结果。支持自定义 `--train-split`、`--val-split`、`--test-split`。
@@ -51,7 +51,7 @@ python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --
 ## 4. 批量训练
 
 ```bash
-python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --epochs 100 --batch-size 8
+python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --epochs 30 --batch-size 32
 ```
 
 默认顺序跑 `experiments.json` 的 10 组：Unet、UnetPlusPlus、MAnet、FPN、PSPNet、DeepLabV3Plus（ResNet34）；Unet、DeepLabV3Plus（MobileNetV2）；Segformer（MiT-B0、MiT-B2）。所有骨干（包括 Segformer 的 MiT）默认随机初始化，无预训练下载。SMP 的 Unet 是使用所选骨干的变体，并非原始从零训练 U-Net。
@@ -99,3 +99,5 @@ GPU 完整训练及测速需在 AutoDL 环境验证。本仓库构建环境仅�
 ## 修改记录
 
 所有仓库改动都通过 GitHub commit 保存，可在仓库 Commits 查看逐次修改及文件 diff。此次加入 benchmark.py，并更新训练、批量汇总和依赖。每个实验的 config.json、history.csv、metrics.json、benchmark.json 是实验记录，与 Git 修改记录分别保存。
+
+默认训练参数：batch size=32、epochs=30（用户指定）。批量训练未传入参数时，每组也使用此默认值。测速 batch size 仍为 1。实际显存占用因模型而异，OOM 时可通过 --batch-size 降低训练批量。
