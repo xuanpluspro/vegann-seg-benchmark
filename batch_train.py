@@ -17,6 +17,8 @@ def main():
             row=dict(name=job['name'],seed=seed,status=status)
             if status==0:
                 m=json.loads((out/'metrics.json').read_text()); row.update(parameters=m['parameters'],best_epoch=m['best_epoch'])
+                for k in ['params_m','gflops','counted_gflops','flops_complete','latency_ms','fps','precision','gpu_name']:
+                    row[k]=m.get('benchmark',{}).get(k)
                 for split in ['val','test']:
                     for k,v in m.get(split,{}).items(): row[f'{split}_{k}']=v
             rows.append(row)
