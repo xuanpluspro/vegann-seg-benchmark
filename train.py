@@ -6,10 +6,12 @@ from PIL import Image, ImageOps
 import torch
 from torch.utils.data import Dataset, DataLoader
 import segmentation_models_pytorch as smp
+from metrics import BinarySegmentationMetrics
 
 class VOC(Dataset):
-    def __init__(self, root, split, size, encoding, augment=False):
+    def __init__(self, root, split, size, encoding, augment=False, foreground_class=0):
         self.root, self.size, self.encoding, self.augment = Path(root), size, encoding, augment
+        self.foreground_class = foreground_class
         paths = [self.root/'ImageSets'/'Segmentation'/f'{split}.txt', self.root/'ImageSets'/f'{split}.txt']
         manifest = next((p for p in paths if p.exists()), None)
         if manifest is None: raise FileNotFoundError(f'Missing split: {paths}')
@@ -41,7 +43,7 @@ class VOC(Dataset):
             if random.random()<.5: image,mask = ImageOps.flip(image),ImageOps.flip(mask)
         raw = np.asarray(mask).copy()
         valid = raw != 255 if self.encoding=='voc' else np.ones_like(raw,dtype=bool)
-        target = raw == (1 if self.encoding=='voc' else 255)
+        target = raw == (self.foreground_class if self.encoding=='voc' else 255)
         x = torch.from_numpy(np.asarray(image).copy()).permute(2,0,1).float()/255
         x = (x-torch.tensor([.485,.456,.406])[:,None,None])/torch.tensor([.229,.224,.225])[:,None,None]
         return x,torch.from_numpy(target).float()[None],torch.from_numpy(valid)[None]
@@ -53,26 +55,27 @@ def loss_fn(logits, target, valid):
     dice=1-(2*(p*y).sum()+1)/(p.sum()+y.sum()+1)
     return bce+dice
 
-def metrics(counts):
-    tn,fp,fn,tp=counts
-    ratio=lambda a,b: float(a/b) if b else None
-    fg=ratio(tp,tp+fp+fn); bg=ratio(tn,tn+fp+fn)
-    return dict(fg_iou=fg,bg_iou=bg,miou=np.mean([x for x in [fg,bg] if x is not None]).item(),dice=ratio(2*tp,2*tp+fp+fn),precision=ratio(tp,tp+fp),recall=ratio(tp,tp+fn),pixel_accuracy=ratio(tp+tn,sum(counts)))
-
 @torch.no_grad()
-def evaluate(model,loader,device):
-    model.eval(); counts=np.zeros(4,dtype=np.int64)
+def evaluate(model,loader,device,boundary_tolerance=2.0):
+    model.eval()
+    meter=BinarySegmentationMetrics(foreground_class=0,background_class=1,ignore_index=255,boundary_tolerance=boundary_tolerance)
     for x,y,v in loader:
-        p=(model(x.to(device)).sigmoid()>=.5).cpu(); y=y.bool()
-        counts+=torch.bincount((y[v].long()*2+p[v].long()),minlength=4).numpy()
-    return metrics(counts)
+        foreground=(model(x.to(device)).sigmoid()>=.5).cpu().squeeze(1)
+        # Training uses foreground probability; uploaded metrics uses class 0 foreground.
+        prediction=(~foreground).long()
+        target=(~y.squeeze(1).bool()).long()
+        target[~v.squeeze(1)]=255
+        meter.update(prediction,target)
+    return meter.compute()
 
 def main():
     p=argparse.ArgumentParser()
     p.add_argument('--data-root',required=True); p.add_argument('--output',default='outputs/unet')
     p.add_argument('--arch',default='Unet'); p.add_argument('--encoder',default='resnet34')
-    p.add_argument('--weights',default='imagenet',help='imagenet or none')
-    p.add_argument('--mask-encoding',choices=['voc','binary255'],required=True,help='voc: 0 background, 1 plant, 255 ignore; binary255: 0 background, 255 plant')
+    p.add_argument('--weights',default='none',help='none (default, no downloads) or imagenet')
+    p.add_argument('--mask-encoding',choices=['voc','binary255'],required=True,help='voc: 0/1 classes, 255 ignore; binary255: 0 background, 255 plant')
+    p.add_argument('--foreground-class',type=int,choices=[0,1],default=0,help='VOC plant class; default 0 matches supplied metrics.py')
+    p.add_argument('--boundary-tolerance',type=float,default=2.0)
     p.add_argument('--train-split',default='train'); p.add_argument('--val-split',default='val'); p.add_argument('--test-split',default='test')
     p.add_argument('--size',type=int,default=512); p.add_argument('--epochs',type=int,default=100)
     p.add_argument('--batch-size',type=int,default=8); p.add_argument('--workers',type=int,default=4)
@@ -81,7 +84,7 @@ def main():
     a=p.parse_args(); out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    def dataset(split,aug=False): return VOC(a.data_root,split,a.size,a.mask_encoding,aug)
+    def dataset(split,aug=False): return VOC(a.data_root,split,a.size,a.mask_encoding,aug,a.foreground_class)
     train,val=dataset(a.train_split,True),dataset(a.val_split)
     if set(train.ids)&set(val.ids): raise ValueError('Train/val overlap')
     test=None
@@ -97,7 +100,7 @@ def main():
     start,best=0,-1
     if restored:
         ck=torch.load(out/('best.pth' if a.eval_only else 'last.pth'),map_location=device,weights_only=False)
-        for key in ['arch','encoder','size','mask_encoding','seed','epochs','lr','batch_size','data_root','train_split','val_split','test_split','weights']:
+        for key in ['arch','encoder','size','mask_encoding','seed','epochs','lr','batch_size','data_root','train_split','val_split','test_split','weights','foreground_class','boundary_tolerance']:
             if ck['config'][key]!=vars(a)[key]: raise ValueError(f'Checkpoint config mismatch: {key}')
         model.load_state_dict(ck['model'])
         if a.resume and not a.eval_only:
@@ -116,7 +119,7 @@ def main():
             with torch.autocast(device_type=device.type,enabled=device.type=='cuda'):
                 loss=loss_fn(model(x),y,v)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); total+=loss.item()*len(x)
-        result=evaluate(model,valloader,device); scheduler.step()
+        result=evaluate(model,valloader,device,a.boundary_tolerance); scheduler.step()
         improved=result['miou']>best
         if improved: best=result['miou']
         ck=dict(model=model.state_dict(),optimizer=opt.state_dict(),scheduler=scheduler.state_dict(),scaler=scaler.state_dict(),epoch=epoch,best=best,config=vars(a),python_rng=random.getstate(),numpy_rng=np.random.get_state(),torch_rng=torch.get_rng_state(),cuda_rng=torch.cuda.get_rng_state_all() if device.type=='cuda' else None)
@@ -129,7 +132,7 @@ def main():
             w.writerow(row)
         print(json.dumps(row),flush=True)
     ck=torch.load(out/'best.pth',map_location=device,weights_only=False); model.load_state_dict(ck['model'])
-    result=dict(arch=a.arch,encoder=a.encoder,seed=a.seed,best_epoch=ck['epoch']+1,parameters=sum(p.numel() for p in model.parameters()),val=evaluate(model,valloader,device))
-    if test is not None: result['test']=evaluate(model,loader(test),device)
+    result=dict(arch=a.arch,encoder=a.encoder,seed=a.seed,best_epoch=ck['epoch']+1,parameters=sum(p.numel() for p in model.parameters()),val=evaluate(model,valloader,device,a.boundary_tolerance))
+    if test is not None: result['test']=evaluate(model,loader(test),device,a.boundary_tolerance)
     (out/'metrics.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
 if __name__=='__main__': main()
