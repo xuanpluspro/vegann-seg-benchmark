@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import segmentation_models_pytorch as smp
 from metrics import BinarySegmentationMetrics
+from benchmark import benchmark_model
 
 class VOC(Dataset):
     def __init__(self, root, split, size, encoding, augment=False, foreground_class=0):
@@ -80,6 +81,8 @@ def main():
     p.add_argument('--size',type=int,default=512); p.add_argument('--epochs',type=int,default=100)
     p.add_argument('--batch-size',type=int,default=8); p.add_argument('--workers',type=int,default=4)
     p.add_argument('--lr',type=float,default=1e-4); p.add_argument('--seed',type=int,default=42)
+    p.add_argument('--benchmark-warmup',type=int,default=50)
+    p.add_argument('--benchmark-iterations',type=int,default=200)
     p.add_argument('--resume',action='store_true'); p.add_argument('--eval-only',action='store_true')
     a=p.parse_args(); out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
@@ -134,5 +137,7 @@ def main():
     ck=torch.load(out/'best.pth',map_location=device,weights_only=False); model.load_state_dict(ck['model'])
     result=dict(arch=a.arch,encoder=a.encoder,seed=a.seed,best_epoch=ck['epoch']+1,parameters=sum(p.numel() for p in model.parameters()),val=evaluate(model,valloader,device,a.boundary_tolerance))
     if test is not None: result['test']=evaluate(model,loader(test),device,a.boundary_tolerance)
+    result['benchmark']=benchmark_model(model,a.size,a.benchmark_warmup,a.benchmark_iterations)
+    (out/'benchmark.json').write_text(json.dumps(result['benchmark'],indent=2))
     (out/'metrics.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
 if __name__=='__main__': main()
