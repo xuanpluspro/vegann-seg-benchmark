@@ -1,0 +1,52 @@
+[
+  {
+    "name": "unet_resnet34",
+    "arch": "Unet",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "unetplusplus_resnet34",
+    "arch": "UnetPlusPlus",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "manet_resnet34",
+    "arch": "MAnet",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "fpn_resnet34",
+    "arch": "FPN",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "pspnet_resnet34",
+    "arch": "PSPNet",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "deeplabv3plus_resnet34",
+    "arch": "DeepLabV3Plus",
+    "encoder": "resnet34"
+  },
+  {
+    "name": "unet_mobilenetv2",
+    "arch": "Unet",
+    "encoder": "mobilenet_v2"
+  },
+  {
+    "name": "deeplabv3plus_mobilenetv2",
+    "arch": "DeepLabV3Plus",
+    "encoder": "mobilenet_v2"
+  },
+  {
+    "name": "segformer_b0",
+    "arch": "Segformer",
+    "encoder": "mit_b0"
+  },
+  {
+    "name": "segformer_b2",
+    "arch": "Segformer",
+    "encoder": "mit_b2"
+  }
+]
