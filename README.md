@@ -60,7 +60,7 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 # 三次随机种子重复实验
 python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --seeds 42 43 44
 # 中断后恢复；保持原来的训练参数和 epochs 不变
-python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --resume
+python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --legacy-output --resume
 ```
 
 每个实验启动独立 Python 进程，失败后记录退出码并继续下一组。看 `outputs/<实验>/console.log`；结果随每次完成写入 `outputs/results.csv`。重新运行已有实验时必须使用 `--resume` 或新输出目录。可编辑 experiments.json 精简模型或设置每组的 `lr`；不应声称一种学习率对所有模型最优。
@@ -121,3 +121,16 @@ python batch_train.py --data-root /root/autodl-tmp/benchmark/data/VOCdevkit-4 --
 ```
 没有 test.txt 时追加 --test-split none。local 模式创建模型时明确禁用自动下载，使用 safetensors 加载并严格检查 encoder 参数。缺文件或参数不匹配直接报错，不回退联网。
 预训练实验使用新输出目录；不要用 --resume 接续原先从零训练的实验。恢复本地预训练实验时加 --resume，直接恢复实验 checkpoint，不需要重新读取预训练文件。
+
+## 输出目录分类管理
+
+新版批量训练默认采用 outputs/<数据集>/<实验名称>/<模型_seed>/，results.csv 位于该实验目录。
+--dataset-name 指定数据集名称，缺省使用 data-root 的文件夹名；--run-name 指定实验名称，缺省自动生成预训练方式、epoch、batch size及时间组成的名称。调学习率等参数时使用不同实验名称，实际完整参数保存在各模型 config.json 中。
+
+```bash
+python batch_train.py --data-root /root/autodl-tmp/benchmark/data/VOCdevkit-4 --weights local --pretrained-dir pretrained --epochs 30 --batch-size 32 --dataset-name VegAnn --run-name local_ep30_bs32_lr1e-4
+```
+
+恢复新版实验：重复相同参数和 dataset-name/run-name，再加 --resume。恢复时不允许省略 run-name，防止误创建新实验。
+旧版已保存的平铺目录保持原位置，恢复时加 --legacy-output --resume，并沿用旧 output-root。
+不要在训练过程中移动输出文件夹：旧 checkpoint 内记录模型输出路径，移动还可能影响正在写入的日志。新版仅改变后续实验的组织方式。
