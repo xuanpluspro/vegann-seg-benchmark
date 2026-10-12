@@ -69,7 +69,7 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 
 每组保存 `config.json`、`history.csv`、`last.pth`、`best.pth`、`metrics.json`。最佳权重仅按验证集两类 mIoU 选择，最后评估独立测试集。预测阈值固定 0.5，不使用测试集调阈值。
 
-评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出是植物概率，评估统一使用 1 植物、0 背景、255 忽略，并显式设置指标类的 foreground_class=1、background_class=0。原 metrics.py 的默认值仍保留供旧调用兼容，本训练入口不使用其默认值。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
+评估直接使用用户提供的 metrics.py（指标公式保留，默认标签统一为 1 前景、0 背景）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出是植物概率，评估统一使用 1 植物、0 背景、255 忽略，并显式设置指标类的 foreground_class=1、background_class=0。metrics.py 默认也采用 1 前景、0 背景；旧调用若使用反向标签，必须显式设置 foreground_class=0、background_class=1。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
 
 ```bash
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --output outputs/unet_resnet34_seed42 --eval-only
