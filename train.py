@@ -10,7 +10,7 @@ from metrics import BinarySegmentationMetrics
 from benchmark import benchmark_model
 
 class VOC(Dataset):
-    def __init__(self, root, split, size, encoding, augment=False, foreground_class=0):
+    def __init__(self, root, split, size, encoding, augment=False, foreground_class=1):
         self.root, self.size, self.encoding, self.augment = Path(root), size, encoding, augment
         self.foreground_class = foreground_class
         paths = [self.root/'ImageSets'/'Segmentation'/f'{split}.txt', self.root/'ImageSets'/f'{split}.txt']
@@ -59,12 +59,12 @@ def loss_fn(logits, target, valid):
 @torch.no_grad()
 def evaluate(model,loader,device,boundary_tolerance=2.0):
     model.eval()
-    meter=BinarySegmentationMetrics(foreground_class=0,background_class=1,ignore_index=255,boundary_tolerance=boundary_tolerance)
+    meter=BinarySegmentationMetrics(foreground_class=1,background_class=0,ignore_index=255,boundary_tolerance=boundary_tolerance)
     for x,y,v in loader:
         foreground=(model(x.to(device)).sigmoid()>=.5).cpu().squeeze(1)
-        # Training uses foreground probability; uploaded metrics uses class 0 foreground.
-        prediction=(~foreground).long()
-        target=(~y.squeeze(1).bool()).long()
+        # Normalize evaluation labels to 1 plant, 0 background, 255 ignore.
+        prediction=foreground.long()
+        target=y.squeeze(1).long()
         target[~v.squeeze(1)]=255
         meter.update(prediction,target)
     return meter.compute()
@@ -74,8 +74,8 @@ def main():
     p.add_argument('--data-root',required=True); p.add_argument('--output',default='outputs/unet')
     p.add_argument('--arch',default='Unet'); p.add_argument('--encoder',default='resnet34')
     p.add_argument('--weights',default='none',help='none (default, no downloads) or imagenet')
-    p.add_argument('--mask-encoding',choices=['voc','binary255'],required=True,help='voc: 0/1 classes, 255 ignore; binary255: 0 background, 255 plant')
-    p.add_argument('--foreground-class',type=int,choices=[0,1],default=0,help='VOC plant class; default 0 matches supplied metrics.py')
+    p.add_argument('--mask-encoding',choices=['voc','binary255'],default='voc',help='voc: 0/1 classes, 255 ignore; binary255: 0 background, 255 plant')
+    p.add_argument('--foreground-class',type=int,choices=[0,1],default=1,help='VOC plant class; default 1 (0 background). Use 0 only for legacy inverted masks')
     p.add_argument('--boundary-tolerance',type=float,default=2.0)
     p.add_argument('--train-split',default='train'); p.add_argument('--val-split',default='val'); p.add_argument('--test-split',default='test')
     p.add_argument('--size',type=int,default=512); p.add_argument('--epochs',type=int,default=30)
