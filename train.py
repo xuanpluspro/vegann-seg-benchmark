@@ -9,6 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 import segmentation_models_pytorch as smp
 from metrics import BinarySegmentationMetrics
 from benchmark import benchmark_model
+from local_weights import load_local_encoder
 
 class VOC(Dataset):
     def __init__(self, root, split, size, encoding, augment=False, foreground_class=1):
@@ -74,7 +75,8 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument('--data-root',required=True); p.add_argument('--output',default='outputs/unet')
     p.add_argument('--arch',default='Unet'); p.add_argument('--encoder',default='resnet34')
-    p.add_argument('--weights',default='none',help='none (default, no downloads) or imagenet')
+    p.add_argument('--weights',choices=['none','imagenet','local'],default='none',help='none: random; imagenet: online; local: offline ImageNet encoder')
+    p.add_argument('--pretrained-dir',default='pretrained',help='Folder containing <encoder>.safetensors for --weights local')
     p.add_argument('--mask-encoding',choices=['voc','binary255'],default='voc',help='voc: 0/1 classes, 255 ignore; binary255: 0 background, 255 plant')
     p.add_argument('--foreground-class',type=int,choices=[0,1],default=1,help='VOC plant class; default 1 (0 background). Use 0 only for legacy inverted masks')
     p.add_argument('--boundary-tolerance',type=float,default=2.0)
@@ -99,7 +101,9 @@ def main():
     print(f'Device: {device}; train={len(train)}, val={len(val)}, test={len(test) if test is not None else 0}; model={a.arch}/{a.encoder}',flush=True)
     print('Initializing model...',flush=True)
     restored=a.resume or a.eval_only
-    model=smp.create_model(a.arch,encoder_name=a.encoder,encoder_weights=None if restored or a.weights.lower()=='none' else a.weights,in_channels=3,classes=1).to(device)
+    model=smp.create_model(a.arch,encoder_name=a.encoder,encoder_weights=None if restored or a.weights in {'none','local'} else a.weights,in_channels=3,classes=1).to(device)
+    if a.weights=='local' and not restored:
+        load_local_encoder(model,a.encoder,a.pretrained_dir)
     opt=torch.optim.AdamW(model.parameters(),lr=a.lr,weight_decay=1e-4)
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(opt,T_max=a.epochs)
     scaler=torch.amp.GradScaler('cuda',enabled=device.type=='cuda')
