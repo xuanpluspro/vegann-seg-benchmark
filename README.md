@@ -101,3 +101,23 @@ GPU 完整训练及测速需在 AutoDL 环境验证。本仓库构建环境仅�
 所有仓库改动都通过 GitHub commit 保存，可在仓库 Commits 查看逐次修改及文件 diff。此次加入 benchmark.py，并更新训练、批量汇总和依赖。每个实验的 config.json、history.csv、metrics.json、benchmark.json 是实验记录，与 Git 修改记录分别保存。
 
 默认训练参数：batch size=32、epochs=30（用户指定）。批量训练未传入参数时，每组也使用此默认值。测速 batch size 仍为 1。实际显存占用因模型而异，OOM 时可通过 --batch-size 降低训练批量。
+
+## 本地预训练权重（AutoDL 离线训练）
+
+10 个实验共用 4 个 ImageNet 骨干权重：resnet34（6组）、mobilenet_v2（2组）、mit_b0（1组）、mit_b2（1组）。
+下载的是骨干权重，分割解码器随机初始化；训练时全部参数参与优化。
+
+在网络正常的电脑下载本仓库 download_pretrained.py，运行：
+```bash
+python download_pretrained.py --output pretrained
+```
+下载脚本仅依赖 Python 标准库，不要求电脑安装 PyTorch 或有 GPU。来源使用 SMP 0.5.0 官方指定的 Hugging Face 仓库及固定 revision。
+manifest.json 保存来源、文件大小和 SHA256；完整成功的文件重跑时校验并跳过，未完成的文件重新下载。
+
+把整个 pretrained 文件夹上传到 /root/autodl-tmp/benchmark/pretrained，然后在 AutoDL 执行：
+```bash
+cd /root/autodl-tmp/benchmark
+python batch_train.py --data-root /root/autodl-tmp/benchmark/data/VOCdevkit-4 --weights local --pretrained-dir /root/autodl-tmp/benchmark/pretrained --epochs 30 --batch-size 32 --output-root outputs/imagenet_local
+```
+没有 test.txt 时追加 --test-split none。local 模式创建模型时明确禁用自动下载，使用 safetensors 加载并严格检查 encoder 参数。缺文件或参数不匹配直接报错，不回退联网。
+预训练实验使用新输出目录；不要用 --resume 接续原先从零训练的实验。恢复本地预训练实验时加 --resume，直接恢复实验 checkpoint，不需要重新读取预训练文件。
