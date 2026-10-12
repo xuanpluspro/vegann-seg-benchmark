@@ -1,6 +1,7 @@
 """VOC binary segmentation training and evaluation."""
 import argparse, csv, json, random, time
 from pathlib import Path
+from tqdm import tqdm
 import numpy as np
 from PIL import Image, ImageOps
 import torch
@@ -57,10 +58,10 @@ def loss_fn(logits, target, valid):
     return bce+dice
 
 @torch.no_grad()
-def evaluate(model,loader,device,boundary_tolerance=2.0):
+def evaluate(model,loader,device,boundary_tolerance=2.0,desc='Validation'):
     model.eval()
     meter=BinarySegmentationMetrics(foreground_class=1,background_class=0,ignore_index=255,boundary_tolerance=boundary_tolerance)
-    for x,y,v in loader:
+    for x,y,v in tqdm(loader,desc=desc,dynamic_ncols=True,mininterval=1.0):
         foreground=(model(x.to(device)).sigmoid()>=.5).cpu().squeeze(1)
         # Normalize evaluation labels to 1 plant, 0 background, 255 ignore.
         prediction=foreground.long()
@@ -95,6 +96,8 @@ def main():
         test=dataset(a.test_split)
         if set(test.ids)&(set(train.ids)|set(val.ids)): raise ValueError('Test overlaps train/val')
     def loader(ds,shuffle=False): return DataLoader(ds,batch_size=a.batch_size,shuffle=shuffle,num_workers=a.workers,pin_memory=device.type=='cuda')
+    print(f'Device: {device}; train={len(train)}, val={len(val)}, test={len(test) if test is not None else 0}; model={a.arch}/{a.encoder}',flush=True)
+    print('Initializing model...',flush=True)
     restored=a.resume or a.eval_only
     model=smp.create_model(a.arch,encoder_name=a.encoder,encoder_weights=None if restored or a.weights.lower()=='none' else a.weights,in_channels=3,classes=1).to(device)
     opt=torch.optim.AdamW(model.parameters(),lr=a.lr,weight_decay=1e-4)
@@ -116,13 +119,16 @@ def main():
     trainloader,valloader=loader(train,True),loader(val)
     for epoch in range(start,a.epochs) if not a.eval_only else []:
         model.train(); total=0; begin=time.time()
-        for x,y,v in trainloader:
+        progress=tqdm(trainloader,desc=f'Epoch {epoch+1}/{a.epochs} Train',dynamic_ncols=True,mininterval=1.0)
+        seen=0
+        for x,y,v in progress:
             x,y,v=x.to(device),y.to(device),v.to(device)
             opt.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type,enabled=device.type=='cuda'):
                 loss=loss_fn(model(x),y,v)
             scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); total+=loss.item()*len(x)
-        result=evaluate(model,valloader,device,a.boundary_tolerance); scheduler.step()
+            seen+=len(x); progress.set_postfix(loss=f'{total/seen:.4f}',refresh=False)
+        result=evaluate(model,valloader,device,a.boundary_tolerance,desc=f'Epoch {epoch+1}/{a.epochs} Val'); scheduler.step()
         improved=result['miou']>best
         if improved: best=result['miou']
         ck=dict(model=model.state_dict(),optimizer=opt.state_dict(),scheduler=scheduler.state_dict(),scaler=scaler.state_dict(),epoch=epoch,best=best,config=vars(a),python_rng=random.getstate(),numpy_rng=np.random.get_state(),torch_rng=torch.get_rng_state(),cuda_rng=torch.cuda.get_rng_state_all() if device.type=='cuda' else None)
@@ -133,10 +139,11 @@ def main():
             w=csv.DictWriter(f,fieldnames=row.keys())
             if f.tell()==0:w.writeheader()
             w.writerow(row)
-        print(json.dumps(row),flush=True)
+        print(f"Epoch {epoch+1}/{a.epochs} | loss={row['loss']:.4f} | val mIoU={result['miou']:.4f} | Dice={result['dice']:.4f} | best mIoU={best:.4f} | time={row['seconds']:.1f}s",flush=True)
     ck=torch.load(out/'best.pth',map_location=device,weights_only=False); model.load_state_dict(ck['model'])
     result=dict(arch=a.arch,encoder=a.encoder,seed=a.seed,best_epoch=ck['epoch']+1,parameters=sum(p.numel() for p in model.parameters()),val=evaluate(model,valloader,device,a.boundary_tolerance))
-    if test is not None: result['test']=evaluate(model,loader(test),device,a.boundary_tolerance)
+    if test is not None: result['test']=evaluate(model,loader(test),device,a.boundary_tolerance,desc='Test')
+    print('Measuring parameters, FLOPs and inference speed...',flush=True)
     result['benchmark']=benchmark_model(model,a.size,a.benchmark_warmup,a.benchmark_iterations)
     (out/'benchmark.json').write_text(json.dumps(result['benchmark'],indent=2))
     (out/'metrics.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
