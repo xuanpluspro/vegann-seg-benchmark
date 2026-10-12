@@ -31,9 +31,9 @@ VOC2012/
 
 也支持直接位于 `ImageSets/train.txt` 等的文件。每行一个无扩展名的图片 ID。无需 XML 检测标注。Windows 路径示例：`D:\VegAnn-Parquet\exchange\VOCdevkit-4\VOC2012`；上传服务器后改成实际 Linux 路径。
 
-必须明确选择掩膜模式，避免静默误读：
+默认按 0 背景、1 植物读取，无需额外指定前景类别或掩膜模式：
 
-- `--mask-encoding voc`：默认 0 植物、1 背景、255 忽略，与上传的 metrics.py 一致；若实际掩膜是 1 植物、0 背景，必须加 `--foreground-class 1`。支持 VOC 调色板 PNG，直接读索引值。
+- `--mask-encoding voc`（默认）：0 背景、1 植物、255 忽略。支持单通道或 VOC 调色板 PNG，直接读类别索引；这里的 voc 是掩膜编码方式，不是模型。旧数据若是 0 植物、1 背景，可显式传入 `--foreground-class 0`。
 - `--mask-encoding binary255`：0 背景、255 植物，没有忽略标签。
 
 RGB 彩色掩膜会报错，需要先转换为单通道类别标签。数据检查拒绝缺图、异常标签、重复 ID、训练/验证/测试重叠。图像缩放使用双线性，掩膜使用最近邻；训练只做同步水平/垂直翻转。
@@ -46,7 +46,7 @@ RGB 彩色掩膜会报错，需要先转换为单通道类别标签。数据检�
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --epochs 30 --batch-size 32 --output outputs/unet_resnet34_seed42
 ```
 
-先用 `--epochs 2 --workers 0` 在单独输出目录验证流程，再开始正式训练。显存不足时降低 batch size。没有独立测试集时显式加 `--test-split none`，输出只包含验证指标，不能称为测试结果。支持自定义 `--train-split`、`--val-split`、`--test-split`。
+先用 `--epochs 2 --workers 0` 在单独输出目录验证流程，再开始正式训练。显存不足时降低 batch size。只有 train.txt 和 val.txt、没有独立 test.txt 时显式加 `--test-split none`，输出只包含验证指标，不能称为测试结果。支持自定义 `--train-split`、`--val-split`、`--test-split`。
 
 ## 4. 批量训练
 
@@ -69,7 +69,7 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 
 每组保存 `config.json`、`history.csv`、`last.pth`、`best.pth`、`metrics.json`。最佳权重仅按验证集两类 mIoU 选择，最后评估独立测试集。预测阈值固定 0.5，不使用测试集调阈值。
 
-评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出仍是植物概率，评估时统一转换为 0 植物、1 背景、255 忽略。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
+评估直接使用用户提供的 metrics.py（原文件保留）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出是植物概率，评估统一使用 1 植物、0 背景、255 忽略，并显式设置指标类的 foreground_class=1、background_class=0。原 metrics.py 的默认值仍保留供旧调用兼容，本训练入口不使用其默认值。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
 
 ```bash
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --output outputs/unet_resnet34_seed42 --eval-only
