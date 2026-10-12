@@ -32,15 +32,29 @@ def _distributed_ready() -> bool:
 class BinarySegmentationMetrics:
     """Accumulate dataset region scores and mean per-image surface scores.
 
-    The project label convention is fixed to class ``0`` for plant foreground,
-    class ``1`` for background, and ``255`` for ignored pixels by default.
-    HD95 and ASSD are measured in pixels at evaluation resolution.
+    Default labels: 1 foreground, 0 background, 255 ignored target pixels.
+    Legacy inverted labels can be used by explicitly passing
+    foreground_class=0, background_class=1.
+
+    update() accepts discrete label tensors [N, H, W] on the same device,
+    not logits or probabilities. Threshold sigmoid outputs or use argmax
+    before calling it; convert 0/255 binary masks to 0/1 first.
+
+    Region metrics accumulate pixel counts over the whole dataset.
+    Dice, precision and recall refer to foreground; mIoU averages both classes.
+    HD95, ASSD and boundary F1 average per valid image. Distances are pixels
+    at evaluation resolution; boundary tolerance defaults to 2 pixels.
+    Both foregrounds empty: surface distances 0 and boundary F1 1.
+    Only one empty: distances use image diagonal and boundary F1 0.
+    Ignored pixels are excluded; masking them can introduce surface edges.
+    Create a new meter for each evaluation pass. For DDP, each rank must
+    call reduce_from_all_processes() once before compute().
     """
 
     def __init__(
         self,
-        foreground_class: int = 0,
-        background_class: int = 1,
+        foreground_class: int = 1,
+        background_class: int = 0,
         ignore_index: int = 255,
         boundary_tolerance: float = 2.0,
     ) -> None:
@@ -163,6 +177,9 @@ class BinarySegmentationMetrics:
             )
             raise ValueError(f"prediction contains unsupported class values: {values}")
 
+        # Internal matrix order is foreground first, regardless of numeric labels.
+        # Rows: true foreground/background; columns: predicted foreground/background.
+        # [[TP, FN], [FP, TN]]
         target_binary = (target == self.background_class).to(torch.int64)
         prediction_binary = (prediction == self.background_class).to(torch.int64)
         indices = 2 * target_binary[valid] + prediction_binary[valid]
