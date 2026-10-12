@@ -7,5 +7,7 @@ def load_local_encoder(model, encoder, directory):
     if not path.is_file():
         raise FileNotFoundError(f"Missing local encoder weights: {path}. Run download_pretrained.py on a networked computer and upload pretrained/.")
     state = load_file(str(path), device="cpu")
-    model.encoder.load_state_dict(state, strict=True)
+    # SMP encoder overrides (notably MiT) accept only state_dict.
+    # Their implementation delegates to the strict default PyTorch loader.
+    model.encoder.load_state_dict(state)
     print(f"Loaded local ImageNet encoder: {path}", flush=True)
