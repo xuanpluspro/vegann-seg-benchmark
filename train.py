@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import segmentation_models_pytorch as smp
 from metrics import BinarySegmentationMetrics
+from segmentation_metrics import write_run_results, append_history
 from benchmark import benchmark_model
 from local_weights import load_local_encoder
 
@@ -69,7 +70,9 @@ def evaluate(model,loader,device,boundary_tolerance=2.0,desc='Validation'):
         target=y.squeeze(1).long()
         target[~v.squeeze(1)]=255
         meter.update(prediction,target)
-    return meter.compute()
+    result=meter.compute()
+    if not result['valid_pixels']: raise ValueError(f'No valid pixels in {desc}')
+    return result
 
 def main():
     p=argparse.ArgumentParser()
@@ -138,17 +141,16 @@ def main():
         ck=dict(model=model.state_dict(),optimizer=opt.state_dict(),scheduler=scheduler.state_dict(),scaler=scaler.state_dict(),epoch=epoch,best=best,config=vars(a),python_rng=random.getstate(),numpy_rng=np.random.get_state(),torch_rng=torch.get_rng_state(),cuda_rng=torch.cuda.get_rng_state_all() if device.type=='cuda' else None)
         torch.save(ck,out/'last.pth')
         if improved: torch.save(ck,out/'best.pth')
-        row=dict(epoch=epoch+1,loss=total/len(train),seconds=time.time()-begin,**result)
-        with (out/'history.csv').open('a',newline='') as f:
-            w=csv.DictWriter(f,fieldnames=row.keys())
-            if f.tell()==0:w.writeheader()
-            w.writerow(row)
+        row=dict(metric_protocol=result["metric_protocol"],epoch=epoch+1,loss=total/len(train),seconds=time.time()-begin,**{k:v for k,v in result.items() if isinstance(v,(int,float)) or v is None})
+        append_history(row,out/'history.csv')
         print(f"Epoch {epoch+1}/{a.epochs} | loss={row['loss']:.4f} | val mIoU={result['miou']:.4f} | Dice={result['dice']:.4f} | best mIoU={best:.4f} | time={row['seconds']:.1f}s",flush=True)
     ck=torch.load(out/'best.pth',map_location=device,weights_only=False); model.load_state_dict(ck['model'])
     result=dict(arch=a.arch,encoder=a.encoder,seed=a.seed,best_epoch=ck['epoch']+1,parameters=sum(p.numel() for p in model.parameters()),val=evaluate(model,valloader,device,a.boundary_tolerance))
     if test is not None: result['test']=evaluate(model,loader(test),device,a.boundary_tolerance,desc='Test')
+    write_run_results(result,out)
     print('Measuring parameters, FLOPs and inference speed...',flush=True)
     result['benchmark']=benchmark_model(model,a.size,a.benchmark_warmup,a.benchmark_iterations)
     (out/'benchmark.json').write_text(json.dumps(result['benchmark'],indent=2))
-    (out/'metrics.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
+    write_run_results(result,out); print(json.dumps(result,indent=2,allow_nan=False))
 if __name__=='__main__': main()
+

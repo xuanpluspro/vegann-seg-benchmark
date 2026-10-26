@@ -2,6 +2,7 @@
 import argparse,csv,json,subprocess,sys
 from pathlib import Path
 from datetime import datetime
+from segmentation_metrics import result_rows, write_summary
 
 def run_logged(cmd, log_path):
     # Binary forwarding preserves tqdm carriage returns in the terminal.
@@ -66,17 +67,13 @@ def main():
             if a.resume and (out/'last.pth').exists():cmd+=['--resume']
             print('Running:',cmd,flush=True)
             status=run_logged(cmd,out/'console.log')
-            row=dict(name=job['name'],seed=seed,status=status)
             if status==0:
-                m=json.loads((out/'metrics.json').read_text()); row.update(parameters=m['parameters'],best_epoch=m['best_epoch'])
-                for k in ['params_m','gflops','counted_gflops','flops_complete','latency_ms','fps','precision','gpu_name']:
-                    row[k]=m.get('benchmark',{}).get(k)
-                for split in ['val','test']:
-                    for k,v in m.get(split,{}).items(): row[f'{split}_{k}']=v
-            rows.append(row)
-            fields=list(dict.fromkeys(k for r in rows for k in r))
-            with (root/'results.csv').open('w',newline='') as f:
-                w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(rows)
+                metrics=json.loads((out/'metrics.json').read_text())
+                rows.extend(result_rows(metrics,name=job['name'],seed=seed,status=status))
+            else:
+                rows.append(dict(name=job['name'],seed=seed,status=status))
+            write_summary(rows,root/'results.csv')
             print(f"Finished {out}: status={status}; see console.log",flush=True)
     if any(r['status'] for r in rows):sys.exit(1)
 if __name__=='__main__': main()
+

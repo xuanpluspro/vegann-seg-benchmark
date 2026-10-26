@@ -69,7 +69,8 @@ python batch_train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding 
 
 每组保存 `config.json`、`history.csv`、`last.pth`、`best.pth`、`metrics.json`。最佳权重仅按验证集两类 mIoU 选择，最后评估独立测试集。预测阈值固定 0.5，不使用测试集调阈值。
 
-评估直接使用用户提供的 metrics.py（指标公式保留，默认标签统一为 1 前景、0 背景）：foreground_iou、background_iou、miou、dice、precision、recall、specificity、accuracy、hd95、assd、boundary_f1。区域指标累计整个数据集混淆矩阵；HD95、ASSD、Boundary F1 按有效图片平均；空掩膜约定沿用原文件。HD95/ASSD 单位是评估尺寸下的像素，Boundary F1 默认容差 2 像素（--boundary-tolerance 可调整）。训练输出是植物概率，评估统一使用 1 植物、0 背景、255 忽略，并显式设置指标类的 foreground_class=1、background_class=0。metrics.py 默认也采用 1 前景、0 背景；旧调用若使用反向标签，必须显式设置 foreground_class=0、background_class=1。参数量包含完整模型，计算量和速度由 benchmark.py 自动统计。边界距离计算会增加验证耗时。
+评估使用共享的 bimseg-segmentation-v2 协议，详见文末“统一指标与结果格式”。二分类输出概率按 0.5 阈值转为 1 前景、0 背景；忽略像素不参与评价。边界距离计算会增加验证耗时。
+
 
 ```bash
 python train.py --data-root /root/autodl-tmp/data/VOC2012 --mask-encoding voc --arch Unet --encoder resnet34 --output outputs/unet_resnet34_seed42 --eval-only
@@ -134,3 +135,35 @@ python batch_train.py --data-root /root/autodl-tmp/benchmark/data/VOCdevkit-4 --
 恢复新版实验：重复相同参数和 dataset-name/run-name，再加 --resume。恢复时不允许省略 run-name，防止误创建新实验。
 旧版已保存的平铺目录保持原位置，恢复时加 --legacy-output --resume，并沿用旧 output-root。
 不要在训练过程中移动输出文件夹：旧 checkpoint 内记录模型输出路径，移动还可能影响正在写入的日志。新版仅改变后续实验的组织方式。
+
+
+
+## 统一指标与结果格式（bimseg-segmentation-v2）
+
+三个仓库使用内容完全一致的 `segmentation_metrics.py`。区域指标先累计整个评估集的混淆矩阵，行=真实类别、列=预测类别；不对逐图 IoU/Dice 求平均。
+
+| 标准字段 | 计算口径 |
+|---|---|
+| `miou` / `macc` | 全部类别（包含背景）的 IoU / Recall 宏平均；所有任务按验证集 mIoU 选择最佳权重 |
+| `foreground_miou` | 仅前景各类别 IoU 的宏平均；二分类即前景 IoU |
+| `union_foreground_iou` | 合并所有非背景类别后的 IoU，不能反映前景内部错分 |
+| `dice` / `precision` / `recall` | 全数据集统计，前景类别宏平均 |
+| `dice_all` | 包含背景的 Dice 宏平均，作为补充，不能与 `dice` 混用 |
+| `pixacc` / `fwiou` | 总体像素准确率 / 按真实像素频率加权的 IoU |
+| `specificity` | 前景并集的特异度，即背景 Recall |
+| `boundary_f1` / `hd95` / `assd` | 逐图逐前景类别计算，先在图内对有效前景类别平均，再对有效图片平均；另存每类结果 |
+
+区域指标分母为零时记录 JSON `null` / CSV 空单元格，宏平均排除该项。边界类别在预测和真实标签中都为空时不参与平均；仅一方为空时 BF1=0、HD95/ASSD=图像对角线。整幅图没有任何有效前景类别对时不参与边界均值；整个数据集都没有时为 null。Boundary F1 默认容差 2 像素，HD95/ASSD 单位为评估尺寸下的像素；其他分数为 0–1。忽略像素不参与统计；将其屏蔽可能在忽略区边缘产生轮廓，比较时必须使用相同有效像素和分辨率。
+
+每次最终评估统一写出：
+- `metrics.json`：完整结果、每类指标、混淆矩阵和协议版本。
+- `results.csv`：固定字段，每行对应 val 或 test。区域 `precision` 与测速 `precision_mode` 分开，避免覆盖。
+- `class_metrics.csv`：每个数据划分、每个类别一行，含 IoU、Dice、Precision、Recall、像素数及边界结果；背景边界列留空。
+- `confusion_matrix.csv`：长表 `split,true_class,predicted_class,pixels`。
+- 开启复杂度测试时另有 `benchmark.json`：完整网络参数量、GFLOPs、FP32 单图前向延迟/FPS等。
+
+批量仓库的实验根目录 `results.csv` 也使用相同列，每个模型/种子/划分一行，以 `name`、`seed`、`split` 区分，不再使用 `test_` / `val_` 前缀的宽表。模型子目录同样保存上述四个文件。缺失或失败数据留空，失败行记录非零 `status`。
+
+旧 JSON 中的兼容字段暂时保留，标准 CSV 只使用上表字段。`plant-seg-lab` 的 `Foreground IoU` 现在对应 `foreground_miou`，原合并值改称 `Union Foreground IoU`；`nclassbenchmark` 的旧 `mdice` 仍是含背景均值，论文推荐取标准 `dice`（等于 `mdice_fg`）。各仓库的损失函数、模型结构、数据增强和预训练设置不因这次指标统一而改变。
+
+旧权重可以重新评价，无需重新训练；旧 CSV 不会自动变为新口径。使用对应原始训练参数在两个 benchmark 仓库追加 `--eval-only`，或在 plant-seg-lab 使用 `summarize.py` / `evaluate_transfer.py` 重新生成结果。不要混合旧边界指标和 v2 指标。统计代码的验证命令：`python -m unittest discover -s tests -p 'test_metric_*.py' -v`（仅需 NumPy/SciPy，无需 GPU）。

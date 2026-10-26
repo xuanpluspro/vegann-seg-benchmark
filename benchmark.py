@@ -1,14 +1,21 @@
-"""Single-image eager PyTorch FP32 complexity and GPU forward timing."""
+"""Single-image eager PyTorch FP32 complexity and GPU forward timing.
+
+Adapted from xuanpluspro/vegann-seg-benchmark/benchmark.py. FLOP totals
+with unsupported operations are reported as partial, never full GFLOPs.
+"""
+import math
 import platform
 import statistics
 import torch
-from fvcore.nn import FlopCountAnalysis
+
 
 @torch.inference_mode()
 def benchmark_model(model, size=512, warmup=50, iterations=200):
     if warmup < 0 or iterations < 1: raise ValueError('Invalid benchmark repetitions')
     device=next(model.parameters()).device
-    was_training=model.training
+    training_modes=[(module, module.training) for module in model.modules()]
+    if any(p.dtype != torch.float32 for p in model.parameters()):
+        raise ValueError("FP32 benchmark requires float32 model parameters")
     cudnn_tf32=torch.backends.cudnn.allow_tf32
     matmul_tf32=torch.backends.cuda.matmul.allow_tf32
     cudnn_benchmark=torch.backends.cudnn.benchmark
@@ -33,6 +40,7 @@ def benchmark_model(model, size=512, warmup=50, iterations=200):
         x=torch.zeros(1,3,size,size,device=device,dtype=torch.float32)
         with torch.autocast(device_type=device.type,enabled=False):
             try:
+                from fvcore.nn import FlopCountAnalysis
                 analysis=FlopCountAnalysis(model,(x,))
                 analysis.unsupported_ops_warnings(False).uncalled_modules_warnings(False)
                 total=analysis.total()/1e9
@@ -57,12 +65,14 @@ def benchmark_model(model, size=512, warmup=50, iterations=200):
             durations=sorted(s.elapsed_time(e) for s,e in zip(starts,ends))
             mean=statistics.mean(durations)
             result.update(latency_ms=mean,latency_median_ms=statistics.median(durations),
-                          latency_p95_ms=durations[min(iterations-1, int(.95*iterations))],
+                          latency_p95_ms=durations[max(0, math.ceil(.95*iterations)-1)],
                           fps=1000/mean if mean>0 else None)
         return result
     finally:
-        model.train(was_training)
+        for module, training in training_modes:
+            module.training=training
         torch.backends.cudnn.allow_tf32=cudnn_tf32
         torch.backends.cuda.matmul.allow_tf32=matmul_tf32
         torch.backends.cudnn.benchmark=cudnn_benchmark
         torch.backends.cudnn.deterministic=cudnn_deterministic
+
